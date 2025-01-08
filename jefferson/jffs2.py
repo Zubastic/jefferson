@@ -6,6 +6,7 @@ import stat
 import struct
 import sys
 import zlib
+import base64
 from pathlib import Path
 
 import cstruct
@@ -32,6 +33,7 @@ JFFS2_COMPR_ZLIB = 0x06
 JFFS2_COMPR_LZO = 0x07
 JFFS2_COMPR_LZMA = 0x08
 JFFS2_COMPR_0x15_LZMA = 0x15
+JFFS2_COMPR_CARLINKIT_ZLIB = 0x16
 
 # /* Compatibility flags. */
 JFFS2_COMPAT_MASK = 0xC000  # /* What do to if an unknown nodetype is found */
@@ -173,6 +175,14 @@ class Jffs2_raw_inode(cstruct.CStruct):
         try:
             if self.compr == JFFS2_COMPR_NONE:
                 self.data = node_data
+            elif self.compr == JFFS2_COMPR_CARLINKIT_ZLIB:
+                swapped_data = bytearray(node_data)
+                for i in range(len(swapped_data)):
+                    if swapped_data[i] == 0x32:
+                        swapped_data[i] = 0x60
+                    elif swapped_data[i] == 0x60:
+                       swapped_data[i] = 0x32
+                self.data = zlib.decompress(bytes(swapped_data))
             elif self.compr == JFFS2_COMPR_ZERO:
                 self.data = b"\x00" * self.dsize
             elif self.compr == JFFS2_COMPR_ZLIB:
@@ -190,15 +200,12 @@ class Jffs2_raw_inode(cstruct.CStruct):
                 print(node_data.hex()[:20])
                 self.data = node_data
         except Exception as e:
-            print(
-                "Decompression error on inode {}: {}".format(self.ino, e),
-                file=sys.stderr,
-            )
-            self.data = b"\x00" * self.dsize
+            print("Error:", e)
+            self.data = node_data
 
         if len(self.data) != self.dsize:
-            print("data length mismatch!")
-
+            print("data length mismatch! Excepted / Length", self.dsize, len(self.data), self.compr)
+        
         if mtd_crc(data[: self.size - 8]) == self.node_crc:
             self.node_crc_match = True
         else:
@@ -414,6 +421,8 @@ def dump_fs(fs, target):
                         os.makedirs(target_path)
                 elif stat.S_ISLNK(inode.mode):
                     print("writing S_ISLNK", path)
+                    if not os.path.isdir(os.path.dirname(target_path)):
+                       os.makedirs(os.path.dirname(target_path))
                     if not os.path.islink(target_path):
                         if os.path.exists(target_path):
                             continue
